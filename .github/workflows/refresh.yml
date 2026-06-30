@@ -1,0 +1,48 @@
+name: Refresh GitHub Star Atlas
+
+on:
+  schedule:
+    - cron: '0 */12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Refresh data
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 fetch_github_10k.py
+          python3 fetch_trending.py
+
+      - name: Build
+        run: npm run build
+
+      - name: Commit updated data if changed
+        run: |
+          if [[ -n "$(git status --porcelain public/data.json)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add public/data.json
+            git commit -m "chore(data): refresh GitHub star atlas"
+            git push
+          else
+            echo "No data changes to commit."
+          fi
