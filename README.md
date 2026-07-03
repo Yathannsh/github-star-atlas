@@ -21,7 +21,8 @@ See [`docs/comparison.md`](docs/comparison.md) for the full competitive comparis
 
 - **Exhaustive 10k+ repo dataset** using recursive star-count partitioning to bypass GitHub's 1,000-result search window.
 - **Readable Crunchbase-style table** with a dedicated two-line description column.
-- **Rows-per-page selector**: 25, 50, 100, 250, 500, or all rows.
+- **Load-more reading flow**: batches of 25–500 (or all) rows append in place; after the first click the next batch auto-loads as you scroll.
+- **Shareable views**: tab, sort, search, and filters sync to the URL (e.g. `?tab=whatsup&sort=gravity`).
 - **Momentum tab** with GitHub Trending daily / weekly / monthly signals.
 - **Transparent scoring** via hot, velocity, and gravity-style sorting.
 - **Filters** for search, language, trend window, activity, license, and sort order.

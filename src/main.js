@@ -5,11 +5,37 @@ const fmt = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDi
 const fullFmt = new Intl.NumberFormat('en');
 const dateFmt = new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' });
 
+const storedBatch = Number(localStorage.getItem('pageSize') || 100);
 const state = {
   repos: [], meta: null,
   tab: 'leaderboard', query: '', language: 'All', license: 'All', activity: 'All', trend: 'All',
-  sort: 'rank', page: 1, pageSize: Number(localStorage.getItem('pageSize') || 100), density: localStorage.getItem('density') || 'compact', selected: null,
+  sort: 'rank', visibleCount: storedBatch, autoLoad: false, pageSize: storedBatch, density: localStorage.getItem('density') || 'compact', selected: null,
 };
+
+const TABS = ['leaderboard', 'whatsup', 'method'];
+const SORTS = ['rank', 'stars', 'recent', 'forks', 'issues', 'name', 'hot', 'velocity', 'gravity'];
+const URL_FILTERS = ['language', 'license', 'activity', 'trend'];
+function defaultSort(tab) { return tab === 'whatsup' ? 'hot' : 'rank'; }
+
+function initStateFromUrl() {
+  const params = new URLSearchParams(location.search);
+  if (TABS.includes(params.get('tab'))) state.tab = params.get('tab');
+  state.sort = SORTS.includes(params.get('sort')) ? params.get('sort') : defaultSort(state.tab);
+  if (params.get('q')) state.query = params.get('q');
+  for (const key of URL_FILTERS) if (params.get(key)) state[key] = params.get(key);
+}
+
+function syncUrl() {
+  const params = new URLSearchParams();
+  if (state.tab !== 'leaderboard') params.set('tab', state.tab);
+  if (state.sort !== defaultSort(state.tab)) params.set('sort', state.sort);
+  if (state.query.trim()) params.set('q', state.query.trim());
+  for (const key of URL_FILTERS) if (state[key] !== 'All') params.set(key, state[key]);
+  const qs = params.toString();
+  history.replaceState(null, '', qs ? `?${qs}` : location.pathname);
+}
+
+function resetList() { state.visibleCount = state.pageSize; state.autoLoad = false; }
 
 const periods = ['daily', 'weekly', 'monthly'];
 const periodLabels = { daily: 'Today', weekly: 'Week', monthly: 'Month' };
@@ -111,7 +137,7 @@ function renderSidebar(filtered) {
     <div class="metric"><span>Snapshot</span><strong>${generated}</strong><em>GitHub Search API</em></div>
     <div class="panel small"><h3>Top languages</h3>${topLangs.map(([k,v]) => `<button class="langFilter" data-lang="${esc(k)}"><span>${esc(k)}</span><b>${v}</b></button>`).join('')}</div>
   `;
-  document.querySelectorAll('.langFilter').forEach(btn => btn.addEventListener('click', () => { state.language = btn.dataset.lang; state.page = 1; render(); }));
+  document.querySelectorAll('.langFilter').forEach(btn => btn.addEventListener('click', () => { state.language = btn.dataset.lang; resetList(); render(); }));
 }
 
 function renderControls() {
@@ -127,7 +153,7 @@ function renderControls() {
     <label><span>Trend</span><select id="trend">${opts(['All','Any trend','daily','weekly','monthly'], state.trend)}</select></label>
     <label><span>Activity</span><select id="activity">${opts(['All','Active only','Pushed in 30d','Pushed in 90d','Pushed this year','Archived only'], state.activity)}</select></label>
     <label><span>License</span><select id="license">${opts(licenses, state.license)}</select></label>
-    <label><span>Rows</span><select id="pageSize">${[25,50,100,250,500,'All'].map(v => `<option value="${v}" ${String(v)===String(state.pageSize) || (v==='All' && state.pageSize===99999) ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+    <label><span>Batch</span><select id="pageSize">${[25,50,100,250,500,'All'].map(v => `<option value="${v}" ${String(v)===String(state.pageSize) || (v==='All' && state.pageSize===99999) ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
     <label><span>Sort</span><select id="sort">${sortOptions.map(([v,l]) => `<option value="${v}" ${v===state.sort?'selected':''}>${l}</option>`).join('')}</select></label>
     <button class="density" id="density">${state.density === 'compact' ? 'Compact' : 'Comfort'}</button>`;
   for (const id of ['q','language','trend','activity','license','sort','pageSize']) {
@@ -138,7 +164,7 @@ function renderControls() {
       } else {
         state[id === 'q' ? 'query' : id] = e.target.value;
       }
-      state.page = 1; render();
+      resetList(); render();
     });
   }
   document.querySelector('#density').addEventListener('click', () => {
@@ -148,15 +174,58 @@ function renderControls() {
 }
 function opts(values, selected) { return values.map(v => `<option value="${esc(v)}" ${v === selected ? 'selected' : ''}>${esc(v[0]?.toUpperCase()+v.slice(1))}</option>`).join(''); }
 
+let loadObserver = null;
+
 function renderContent(filtered) {
+  loadObserver?.disconnect();
   if (state.tab === 'method') return renderMethod();
   renderTable(filtered);
 }
+function shownLabel(filtered) { return `${fullFmt.format(Math.min(state.visibleCount, filtered.length))} of ${fullFmt.format(filtered.length)} shown`; }
+function footHtml(filtered) {
+  const remaining = filtered.length - state.visibleCount;
+  const next = Math.min(state.pageSize, remaining);
+  return `
+    ${remaining > 0 ? `<button class="loadMore" id="loadMore">▼ Show ${fullFmt.format(next)} more</button>` : ''}
+    <span class="shownNote">${shownLabel(filtered)}</span>
+    <button class="toTop" id="toTop">↑ Top</button>`;
+}
+function bindRow(row) {
+  row.addEventListener('click', () => { state.selected = state.repos.find(r => r.id == row.dataset.id); render(); });
+}
+function bindFoot(filtered) {
+  document.querySelector('#loadMore')?.addEventListener('click', () => {
+    const firstClick = !state.autoLoad;
+    appendBatch(filtered);
+    if (firstClick) { state.autoLoad = true; setupAutoLoad(filtered); }
+  });
+  document.querySelector('#toTop')?.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+}
+function appendBatch(filtered) {
+  const next = filtered.slice(state.visibleCount, state.visibleCount + state.pageSize);
+  if (!next.length) return;
+  state.visibleCount += next.length;
+  const table = document.querySelector('.repoTable');
+  table.insertAdjacentHTML('beforeend', next.map(rowHtml).join(''));
+  const rows = table.querySelectorAll('.repoRow');
+  for (let i = rows.length - next.length; i < rows.length; i++) bindRow(rows[i]);
+  document.querySelector('#shownNote').textContent = shownLabel(filtered);
+  document.querySelector('#listFoot').innerHTML = footHtml(filtered);
+  bindFoot(filtered);
+}
+function setupAutoLoad(filtered) {
+  loadObserver?.disconnect();
+  if (!state.autoLoad) return;
+  const sentinel = document.querySelector('#sentinel');
+  if (!sentinel) return;
+  loadObserver = new IntersectionObserver(entries => {
+    if (entries.some(e => e.isIntersecting) && state.visibleCount < filtered.length) appendBatch(filtered);
+  }, { rootMargin: '600px 0px' });
+  loadObserver.observe(sentinel);
+}
 function renderTable(filtered) {
-  const pages = Math.max(1, Math.ceil(filtered.length / state.pageSize));
-  state.page = Math.min(state.page, pages);
-  const start = (state.page - 1) * state.pageSize;
-  const rows = filtered.slice(start, start + state.pageSize);
+  state.visibleCount = Math.min(state.visibleCount, filtered.length) || Math.min(state.pageSize, filtered.length);
+  const rows = filtered.slice(0, state.visibleCount);
   const intro = state.tab === 'whatsup'
     ? `<div class="intro"><b>What's up</b><span>Recent velocity first: GitHub Trending stars gained + Reddit/HN-style time decay + push freshness. Totals are tie-breakers, not the story.</span></div>`
     : `<div class="intro"><b>Leaderboard</b><span>One-line scan view of the full 10k+ universe. Click a row for full metadata.</span></div>`;
@@ -164,15 +233,17 @@ function renderTable(filtered) {
   document.querySelector('#content').innerHTML = `
     ${intro}
     <div class="tableShell ${state.density}">
-      <div class="tableMeta"><span>${fullFmt.format(filtered.length)} matches</span><span>page ${state.page} / ${pages}</span><div class="pager"><button id="prev" ${state.page===1?'disabled':''}>←</button><button id="next" ${state.page===pages?'disabled':''}>→</button></div></div>
+      <div class="tableMeta"><span>${fullFmt.format(filtered.length)} matches</span><span id="shownNote">${shownLabel(filtered)}</span></div>
       <div class="repoTable" role="table">
         <div class="thead" role="row">${headers()}</div>
         ${rows.map(rowHtml).join('') || '<div class="empty">No repositories match these filters.</div>'}
       </div>
-    </div>`;
-  document.querySelector('#prev')?.addEventListener('click', () => { state.page--; render(); });
-  document.querySelector('#next')?.addEventListener('click', () => { state.page++; render(); });
-  document.querySelectorAll('.repoRow').forEach(row => row.addEventListener('click', () => { state.selected = state.repos.find(r => r.id == row.dataset.id); render(); }));
+    </div>
+    <div id="sentinel" aria-hidden="true"></div>
+    <div class="listFoot" id="listFoot">${footHtml(filtered)}</div>`;
+  document.querySelectorAll('.repoRow').forEach(bindRow);
+  bindFoot(filtered);
+  setupAutoLoad(filtered);
 }
 function headers() {
   return ['#','Repository','Description','Stars','Δ trend','Lang','Pushed','Signal'].map(h => `<div>${h}</div>`).join('');
@@ -231,19 +302,21 @@ function renderMethod() {
 function bindShellEvents() {
   document.querySelectorAll('[data-tab]').forEach(btn => btn.addEventListener('click', () => {
     state.tab = btn.dataset.tab;
-    state.sort = state.tab === 'whatsup' ? 'hot' : 'rank';
-    state.page = 1; render();
+    state.sort = defaultSort(state.tab);
+    resetList(); render();
   }));
 }
 
 function render() {
   document.body.dataset.density = state.density;
+  syncUrl();
   renderShell(); bindShellEvents();
   const filtered = filteredRepos();
   renderSidebar(filtered); renderControls(); renderContent(filtered);
 }
 
 async function init() {
+  initStateFromUrl();
   app.innerHTML = '<div class="loading">Loading GitHub Star Atlas…</div>';
   const res = await fetch('/data.json', { cache: 'no-store' });
   if (!res.ok) throw new Error(`data.json returned ${res.status}`);
