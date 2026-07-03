@@ -4,6 +4,9 @@
 Uses GitHub Search API and recursively partitions by star count because GitHub only
 returns the first 1,000 results for any single search query. The script respects
 search rate limits and writes public/data.json for the website.
+
+Longitudinal tracking: each repo carries a `first_seen` timestamp that survives
+across refreshes, so the website can surface new additions to the 10k+ universe.
 """
 import json
 import math
@@ -30,9 +33,9 @@ if TOKEN:
 
 last_search_at = 0.0
 
+
 def request_json(url: str, *, search: bool = True):
     global last_search_at
-    # Unauthenticated GitHub search is 10 req/min. Keep a conservative spacing.
     if search and not TOKEN:
         elapsed = time.time() - last_search_at
         if elapsed < 6.3:
@@ -55,6 +58,7 @@ def request_json(url: str, *, search: bool = True):
                 continue
             raise RuntimeError(f"GitHub API error {e.code}: {body[:500]} for {url}")
 
+
 def search_count(query: str) -> int:
     url = "https://api.github.com/search/repositories?" + urllib.parse.urlencode({
         "q": query,
@@ -62,6 +66,7 @@ def search_count(query: str) -> int:
     })
     data, _ = request_json(url)
     return int(data["total_count"])
+
 
 def search_page(query: str, page: int, per_page: int = 100):
     url = "https://api.github.com/search/repositories?" + urllib.parse.urlencode({
@@ -74,12 +79,14 @@ def search_page(query: str, page: int, per_page: int = 100):
     data, headers = request_json(url)
     return data["items"], headers
 
+
 def query_for(lo: int, hi: int | None) -> str:
     if hi is None:
         return f"stars:>{lo}"
     if lo == hi:
         return f"stars:{lo}"
     return f"stars:{lo}..{hi}"
+
 
 def partition(lo: int, hi: int | None, depth=0):
     q = query_for(lo, hi)
@@ -88,7 +95,6 @@ def partition(lo: int, hi: int | None, depth=0):
     if count <= 1000:
         return [(lo, hi, count)]
     if hi is None:
-        # Find max-ish upper bound by probing the current top repo once.
         items, _ = search_page(q, 1, 1)
         max_star = int(items[0]["stargazers_count"])
         hi = max_star
@@ -99,8 +105,8 @@ def partition(lo: int, hi: int | None, depth=0):
     if hi <= lo:
         return [(lo, hi, count)]
     mid = (lo + hi) // 2
-    # Fetch high ranges first for better progressive UI if interrupted.
     return partition(mid + 1, hi, depth + 1) + partition(lo, mid, depth + 1)
+
 
 def compact_repo(r):
     return {
@@ -129,7 +135,21 @@ def compact_repo(r):
         "default_branch": r.get("default_branch"),
     }
 
+
 def main():
+    prev_repos = {}
+    prev_generated_at = None
+    if OUT.exists():
+        try:
+            prev_data = json.loads(OUT.read_text())
+            for r in prev_data.get("repos", []):
+                prev_repos[r["full_name"].lower()] = r
+            prev_generated_at = prev_data.get("generated_at")
+        except Exception as exc:
+            print(f"Could not read previous data.json: {exc}", file=sys.stderr)
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     (ROOT / "public").mkdir(exist_ok=True)
     ranges = partition(10000, None)
     repos = {}
@@ -149,8 +169,6 @@ def main():
             got += len(items)
             print(f"  page {page}/{pages}: {len(items)} items (search remaining {headers.get('x-ratelimit-remaining')})", flush=True)
         ranges_out.append({"query": q, "lo": lo, "hi": hi, "github_count": count, "fetched": got})
-    # Star counts can change while the crawl is running. Reconcile the live top
-    # window so a repo that moved above our initial upper bound is not missed.
     top_query = f"stars:>{max((r['stars'] for r in repos.values()), default=10000)}"
     top_added = []
     top_count = 0
@@ -166,22 +184,35 @@ def main():
     except Exception as exc:
         print(f"Top-window reconciliation failed: {exc}", file=sys.stderr)
 
+    first_seen_count = 0
+    for r in repos.values():
+        key = r["full_name"].lower()
+        prev = prev_repos.get(key)
+        if prev and prev.get("first_seen"):
+            r["first_seen"] = prev["first_seen"]
+        else:
+            r["first_seen"] = now_iso
+            first_seen_count += 1
+
     repo_list = sorted(repos.values(), key=lambda r: (-r["stars"], r["full_name"].lower()))
     for i, r in enumerate(repo_list, 1):
         r["rank"] = i
     payload = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": now_iso,
+        "prev_generated_at": prev_generated_at,
         "threshold": 10000,
         "source": "GitHub Search API",
         "method": "Recursive star-count partitioning to bypass GitHub's 1,000-result search window per query, followed by a live top-window reconciliation for repos whose stars changed during the crawl.",
         "expected_from_range_counts": total_expected,
         "top_reconciliation": {"query": top_query, "fetched": top_count, "added": top_added},
+        "first_seen_count_this_refresh": first_seen_count,
         "count": len(repo_list),
         "ranges": ranges_out,
         "repos": repo_list,
     }
     OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Wrote {OUT} with {len(repo_list)} unique repositories; expected count sum {total_expected}")
+    print(f"Wrote {OUT} with {len(repo_list)} unique repositories ({first_seen_count} new); expected count sum {total_expected}")
+
 
 if __name__ == "__main__":
     main()

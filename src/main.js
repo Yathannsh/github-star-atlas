@@ -20,6 +20,8 @@ function repoAgeDays(r) { return r.created_at ? Math.max(1, Math.floor((Date.now
 function pushedLabel(iso) { const d = daysSince(iso); if (d === 0) return 'today'; if (d === 1) return '1d'; if (d < 30) return `${d}d`; if (d < 365) return `${Math.round(d/30)}mo`; return `${Math.round(d/365)}y`; }
 function esc(s = '') { return String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
 function countBy(rows, fn) { const m = new Map(); for (const row of rows) m.set(fn(row), (m.get(fn(row)) || 0) + 1); return [...m.entries()].sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0])); }
+function timeAgo(iso) { const d = daysSince(iso); if (d === 0) return 'today'; if (d === 1) return 'yesterday'; if (d < 7) return `${d}d ago`; if (d < 30) return `${Math.round(d/7)}w ago`; if (d < 365) return `${Math.round(d/30)}mo ago`; return `${Math.round(d/365)}y ago`; }
+function shortTime(iso) { if (!iso) return ''; return dateFmt.format(new Date(iso)); }
 
 function bestTrend(r) {
   const t = r.trending || {};
@@ -35,13 +37,20 @@ function recencyScore(r) { return Math.exp(-daysSince(r.pushed_at) / 90); }
 function hotScore(r) {
   const gain = trendGain(r);
   const periodBoost = r.trending?.daily ? 4 : r.trending?.weekly ? 2.4 : r.trending?.monthly ? 1.3 : 0;
-  // Reddit/HN-inspired: recent velocity dominates; old total stars are a small tie-breaker.
   return (Math.log10(gain + 1) * 6) + periodBoost + (recencyScore(r) * 2) + (Math.log10(r.stars + 1) * 0.22) - (repoAgeDays(r) / 3650);
 }
 function gravityScore(r) {
   const gain = Math.max(1, trendGain(r));
   return gain / Math.pow((daysSince(r.pushed_at) + 2), 1.35);
 }
+
+function unseenThreshold() {
+  const saved = localStorage.getItem('dismissedNewSince');
+  if (saved) return saved;
+  return state.meta?.prev_generated_at || state.meta?.generated_at || '1970-01-01T00:00:00';
+}
+function isUnseen(r) { return r.first_seen > unseenThreshold(); }
+function unseenCount(rows) { return rows.filter(r => isUnseen(r)).length; }
 
 function repoMatches(repo) {
   const q = state.query.trim().toLowerCase();
@@ -64,11 +73,14 @@ function repoMatches(repo) {
 }
 
 function sortRepos(a, b) {
-  const sort = state.tab === 'whatsup' && state.sort === 'rank' ? 'hot' : state.sort;
+  const sort = (state.tab === 'whatsup' && state.sort === 'rank') ? 'hot'
+    : (state.tab === 'newtab' && state.sort === 'rank') ? 'firstSeen'
+    : state.sort;
   switch (sort) {
     case 'hot': return hotScore(b) - hotScore(a) || b.stars - a.stars;
     case 'velocity': return trendGain(b) - trendGain(a) || hotScore(b) - hotScore(a);
     case 'gravity': return gravityScore(b) - gravityScore(a) || trendGain(b) - trendGain(a);
+    case 'firstSeen': return (b.first_seen || '').localeCompare(a.first_seen || '') || b.stars - a.stars;
     case 'stars': return b.stars - a.stars || a.full_name.localeCompare(b.full_name);
     case 'forks': return b.forks - a.forks || b.stars - a.stars;
     case 'issues': return b.open_issues - a.open_issues || b.stars - a.stars;
@@ -81,11 +93,13 @@ function sortRepos(a, b) {
 function filteredRepos() { return state.repos.filter(repoMatches).sort(sortRepos); }
 
 function renderShell() {
+  const unseen = unseenCount(state.repos);
+  const badgeHtml = unseen > 0 ? `<span class="badge">${fullFmt.format(unseen)}</span>` : '';
   app.innerHTML = `
     <header class="topbar">
       <div class="brand"><span class="mark">★</span><div><b>GitHub 10k+ Star Atlas</b><small>readable repo intelligence</small></div></div>
       <nav class="tabs" role="tablist">
-        ${tabButton('leaderboard','Leaderboard')}${tabButton('whatsup',"What's up")}${tabButton('method','Method')}
+        ${tabButton('leaderboard','Leaderboard')}${tabButton('whatsup',"What's up")}${tabButton('newtab',`New${badgeHtml}`)}${tabButton('method','Method')}
       </nav>
       <a class="link" href="https://github.com/trending" target="_blank" rel="noreferrer">GitHub Trending ↗</a>
     </header>
@@ -104,11 +118,12 @@ function renderSidebar(filtered) {
   const trending = state.repos.filter(r => r.trending).length;
   const topLangs = countBy(state.repos, r => r.language || 'Unknown').slice(0, 8);
   const generated = state.meta?.generated_at ? dateFmt.format(new Date(state.meta.generated_at)) : 'Unknown';
+  const newCount = state.repos.filter(r => r.first_seen === state.meta?.generated_at || (state.meta?.prev_generated_at && r.first_seen > state.meta.prev_generated_at)).length;
   document.querySelector('#sidebar').innerHTML = `
     <div class="metric"><span>Repos</span><strong>${fullFmt.format(state.repos.length)}</strong><em>${fullFmt.format(filtered.length)} shown</em></div>
     <div class="metric"><span>Trend matched</span><strong>${fullFmt.format(trending)}</strong><em>from GitHub daily/week/month</em></div>
     <div class="metric"><span>Active</span><strong>${fullFmt.format(active90)}</strong><em>pushed in 90d</em></div>
-    <div class="metric"><span>Snapshot</span><strong>${generated}</strong><em>GitHub Search API</em></div>
+    <div class="metric"><span>New this refresh</span><strong>${fullFmt.format(newCount)}</strong><em>${generated}</em></div>
     <div class="panel small"><h3>Top languages</h3>${topLangs.map(([k,v]) => `<button class="langFilter" data-lang="${esc(k)}"><span>${esc(k)}</span><b>${v}</b></button>`).join('')}</div>
   `;
   document.querySelectorAll('.langFilter').forEach(btn => btn.addEventListener('click', () => { state.language = btn.dataset.lang; state.page = 1; render(); }));
@@ -118,9 +133,14 @@ function renderControls() {
   if (state.tab === 'method') { document.querySelector('#controls').innerHTML = ''; return; }
   const languages = ['All', ...countBy(state.repos, r => r.language || 'Unknown').map(([k]) => k)];
   const licenses = ['All', ...countBy(state.repos, r => r.license || 'NOASSERTION').map(([k]) => k).slice(0, 42)];
-  const sortOptions = state.tab === 'whatsup'
-    ? [['hot','Hot'], ['velocity','Velocity'], ['gravity','HN gravity'], ['recent','Recently pushed'], ['stars','Stars']]
-    : [['rank','Rank'], ['stars','Stars'], ['recent','Recently pushed'], ['forks','Forks'], ['issues','Issues'], ['name','Name']];
+  let sortOptions;
+  if (state.tab === 'whatsup') {
+    sortOptions = [['hot','Hot'], ['velocity','Velocity'], ['gravity','HN gravity'], ['recent','Recently pushed'], ['stars','Stars']];
+  } else if (state.tab === 'newtab') {
+    sortOptions = [['firstSeen','Newest first'], ['stars','Stars'], ['recent','Recently pushed'], ['name','Name']];
+  } else {
+    sortOptions = [['rank','Rank'], ['stars','Stars'], ['recent','Recently pushed'], ['forks','Forks'], ['issues','Issues'], ['name','Name']];
+  }
   document.querySelector('#controls').innerHTML = `
     <label class="search"><span>Search</span><input id="q" value="${esc(state.query)}" placeholder="repo, owner, topic, language…" /></label>
     <label><span>Language</span><select id="language">${opts(languages, state.language)}</select></label>
@@ -129,9 +149,11 @@ function renderControls() {
     <label><span>License</span><select id="license">${opts(licenses, state.license)}</select></label>
     <label><span>Rows</span><select id="pageSize">${[25,50,100,250,500,'All'].map(v => `<option value="${v}" ${String(v)===String(state.pageSize) || (v==='All' && state.pageSize===99999) ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
     <label><span>Sort</span><select id="sort">${sortOptions.map(([v,l]) => `<option value="${v}" ${v===state.sort?'selected':''}>${l}</option>`).join('')}</select></label>
-    <button class="density" id="density">${state.density === 'compact' ? 'Compact' : 'Comfort'}</button>`;
+    ${state.tab === 'newtab' ? `<button class="density" id="markSeen">✓ Mark seen</button>` : `<button class="density" id="density">${state.density === 'compact' ? 'Compact' : 'Comfort'}</button>`}`;
   for (const id of ['q','language','trend','activity','license','sort','pageSize']) {
-    document.querySelector(`#${id}`).addEventListener('input', e => {
+    const el = document.querySelector(`#${id}`);
+    if (!el) continue;
+    el.addEventListener('input', e => {
       if (id === 'pageSize') {
         state.pageSize = e.target.value === 'All' ? 99999 : Number(e.target.value);
         localStorage.setItem('pageSize', String(state.pageSize));
@@ -141,10 +163,21 @@ function renderControls() {
       state.page = 1; render();
     });
   }
-  document.querySelector('#density').addEventListener('click', () => {
-    state.density = state.density === 'compact' ? 'comfort' : 'compact';
-    localStorage.setItem('density', state.density); render();
-  });
+  const densityBtn = document.querySelector('#density');
+  if (densityBtn) {
+    densityBtn.addEventListener('click', () => {
+      state.density = state.density === 'compact' ? 'comfort' : 'compact';
+      localStorage.setItem('density', state.density); render();
+    });
+  }
+  const markSeen = document.querySelector('#markSeen');
+  if (markSeen) {
+    markSeen.addEventListener('click', () => {
+      const threshold = state.meta?.generated_at || new Date().toISOString();
+      localStorage.setItem('dismissedNewSince', threshold);
+      render();
+    });
+  }
 }
 function opts(values, selected) { return values.map(v => `<option value="${esc(v)}" ${v === selected ? 'selected' : ''}>${esc(v[0]?.toUpperCase()+v.slice(1))}</option>`).join(''); }
 
@@ -159,6 +192,8 @@ function renderTable(filtered) {
   const rows = filtered.slice(start, start + state.pageSize);
   const intro = state.tab === 'whatsup'
     ? `<div class="intro"><b>What's up</b><span>Recent velocity first: GitHub Trending stars gained + Reddit/HN-style time decay + push freshness. Totals are tie-breakers, not the story.</span></div>`
+    : state.tab === 'newtab'
+    ? `<div class="intro"><b>New arrivals</b><span>Repositories that recently crossed the 10k-star threshold, sorted by when they were first detected. Use "<b>Mark seen</b>" to track what you have reviewed.</span></div>`
     : `<div class="intro"><b>Leaderboard</b><span>One-line scan view of the full 10k+ universe. Click a row for full metadata.</span></div>`;
   if (!state.selected && rows[0]) state.selected = rows[0];
   document.querySelector('#content').innerHTML = `
@@ -175,24 +210,36 @@ function renderTable(filtered) {
   document.querySelectorAll('.repoRow').forEach(row => row.addEventListener('click', () => { state.selected = state.repos.find(r => r.id == row.dataset.id); render(); }));
 }
 function headers() {
+  if (state.tab === 'newtab') {
+    return ['#','Repository','Description','Stars','Discovered','Lang','Pushed','Signal'].map(h => `<div>${h}</div>`).join('');
+  }
   return ['#','Repository','Description','Stars','Δ trend','Lang','Pushed','Signal'].map(h => `<div>${h}</div>`).join('');
 }
 function trendPills(r) {
   const t = r.trending || {};
   const pills = periods.filter(p => t[p]).map(p => `<span class="pill trend ${p}">${periodLabels[p]} #${t[p].rank}</span>`);
   if (r.archived) pills.push('<span class="pill muted">Archived</span>');
+  if (isUnseen(r)) pills.push('<span class="pill newFlag">New</span>');
   return pills.join('') || `<span class="mutedText">—</span>`;
 }
 function rowHtml(r) {
   const trend = bestTrend(r);
   const gain = trendGain(r);
-  const signal = state.tab === 'whatsup' ? hotScore(r).toFixed(1) : (trend ? `${periodLabels[trend.period]} #${trend.rank}` : 'steady');
-  return `<div class="repoRow ${state.selected?.id === r.id ? 'selected' : ''}" role="row" data-id="${r.id}">
-    <div class="rank">${r.rank}</div>
+  const isNewTab = state.tab === 'newtab';
+  let signal;
+  if (isNewTab) {
+    signal = `${timeAgo(r.first_seen)}`;
+  } else if (state.tab === 'whatsup') {
+    signal = hotScore(r).toFixed(1);
+  } else {
+    signal = trend ? `${periodLabels[trend.period]} #${trend.rank}` : 'steady';
+  }
+  return `<div class="repoRow ${state.selected?.id === r.id ? 'selected' : ''} ${isUnseen(r) ? 'unseen' : ''}" role="row" data-id="${r.id}">
+    <div class="rank">${isNewTab ? timeAgo(r.first_seen) : r.rank}</div>
     <div class="repoName"><a href="${r.html_url}" target="_blank" rel="noreferrer">${esc(r.full_name)}</a></div>
     <div class="descCell" title="${esc(r.description || 'No description')}">${esc(r.description || 'No description')}</div>
     <div class="num">${fmt.format(r.stars)}</div>
-    <div class="num ${gain ? 'gain' : ''}">${gain ? '+' + fullFmt.format(gain) : '—'}</div>
+    <div class="num ${gain ? 'gain' : ''}">${isNewTab ? shortTime(r.first_seen) : (gain ? '+' + fullFmt.format(gain) : '—')}</div>
     <div><span class="lang">${esc(r.language || 'Unknown')}</span></div>
     <div>${pushedLabel(r.pushed_at)}</div>
     <div>${trendPills(r)}</div>
@@ -203,12 +250,13 @@ function detailsHtml(r) {
   const trendLines = periods.filter(p => t[p]).map(p => `<span>${periodLabels[p]}: #${t[p].rank}${t[p].stars_gained ? ` · +${fullFmt.format(t[p].stars_gained)} stars` : ''}</span>`).join('');
   return `<div class="detailHeader"><span class="eyebrow">Repository profile</span><h3><a href="${r.html_url}" target="_blank" rel="noreferrer">${esc(r.full_name)} ↗</a></h3></div>
     <section class="fullDescription"><b>Description</b><p>${esc(r.description || 'No description provided by GitHub.')}</p></section>
-    <div class="detailGrid"><span>Hot ${hotScore(r).toFixed(2)}</span><span>Gravity ${gravityScore(r).toFixed(2)}</span><span>${fullFmt.format(r.stars)} stars</span><span>${fullFmt.format(r.forks)} forks</span><span>Created ${r.created_at ? dateFmt.format(new Date(r.created_at)) : '—'}</span><span>Pushed ${r.pushed_at ? dateFmt.format(new Date(r.pushed_at)) : '—'}</span>${trendLines || '<span>No GitHub Trending hit in current snapshot</span>'}</div>
+    <div class="detailGrid"><span>Hot ${hotScore(r).toFixed(2)}</span><span>Gravity ${gravityScore(r).toFixed(2)}</span><span>${fullFmt.format(r.stars)} stars</span><span>${fullFmt.format(r.forks)} forks</span><span>Created ${r.created_at ? dateFmt.format(new Date(r.created_at)) : '—'}</span><span>Pushed ${r.pushed_at ? dateFmt.format(new Date(r.pushed_at)) : '—'}</span><span>First seen ${r.first_seen ? shortTime(r.first_seen) : '—'}</span>${trendLines || '<span>No GitHub Trending hit in current snapshot</span>'}</div>
     <div class="topics">${(r.topics || []).slice(0, 12).map(t => `<span>${esc(t)}</span>`).join('')}</div>`;
 }
 
 function renderMethod() {
   const trendCounts = state.meta?.trending_snapshot?.periods || {};
+  const newThisRefresh = state.repos.filter(r => r.first_seen === state.meta?.generated_at || (state.meta?.prev_generated_at && r.first_seen > state.meta.prev_generated_at)).length;
   document.querySelector('#content').innerHTML = `
     <section class="methodGrid">
       <article class="methodCard"><h2>Readable table principles applied</h2><ul>
@@ -222,16 +270,19 @@ function renderMethod() {
         <li><b>GitHub:</b> daily / weekly / monthly trending scrape. Current scrape sizes: daily ${trendCounts.daily || 0}, weekly ${trendCounts.weekly || 0}, monthly ${trendCounts.monthly || 0}.</li>
         <li><b>Reddit-style hot:</b> velocity dominates, recent push activity boosts, old age decays; total stars are only a tie-breaker.</li>
         <li><b>HN gravity:</b> period stars gained divided by age/freshness decay, surfacing newer fast movers.</li>
-        <li><b>Longitudinal-ready:</b> the dataset keeps stable repo IDs so future snapshots can add true star deltas over time.</li>
+        <li><b>New repo tracking:</b> each repo carries a `first_seen` timestamp. The <b>New</b> tab shows repos sorted by discovery order, with a mark-seen dismiss flow.</li>
       </ul></article>
-      <article class="methodCard"><h2>Data source</h2><p>${esc(state.meta?.method || '')}</p><p>${esc(state.meta?.trending_snapshot?.note || '')}</p><a href="/data.json" download>Download full JSON snapshot</a></article>
+      <article class="methodCard"><h2>New repo tracking</h2><p>Every 12-hour refresh identifies repositories that were not present in the previous snapshot. These get a `first_seen` timestamp equal to the current crawl time. Existing repos carry forward their original `first_seen`.</p><p>Currently <b>${newThisRefresh}</b> repos were added in this refresh cycle. The badge on the <b>New</b> tab shows how many are unseen since you last clicked "Mark seen".</p>
+      <a href="/data.json" download>Download full JSON snapshot</a></article>
     </section>`;
 }
 
 function bindShellEvents() {
   document.querySelectorAll('[data-tab]').forEach(btn => btn.addEventListener('click', () => {
     state.tab = btn.dataset.tab;
-    state.sort = state.tab === 'whatsup' ? 'hot' : 'rank';
+    if (state.tab === 'whatsup') state.sort = 'hot';
+    else if (state.tab === 'newtab') state.sort = 'firstSeen';
+    else state.sort = 'rank';
     state.page = 1; render();
   }));
 }
