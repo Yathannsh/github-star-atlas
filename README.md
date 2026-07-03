@@ -21,7 +21,8 @@ See [`docs/comparison.md`](docs/comparison.md) for the full competitive comparis
 
 - **Exhaustive 10k+ repo dataset** using recursive star-count partitioning to bypass GitHub's 1,000-result search window.
 - **Readable Crunchbase-style table** with a dedicated two-line description column.
-- **Load-more reading flow**: batches of 25–500 (or all) rows append in place; after the first click the next batch auto-loads as you scroll.
+- **Classic pagination**: 100 rows per page by default (25–500 or all via the Rows selector) with a numbered pager; the page number is shareable in the URL.
+- **Arrivals tab**: every repository dated from the day it first crossed 10,000 stars, newest first.
 - **Shareable views**: tab, sort, search, and filters sync to the URL (e.g. `?tab=whatsup&sort=gravity`).
 - **New arrivals tracking**: `public/first_seen.json` records when each repo first crossed 10k stars — new crossers get a "New 10k+" pill, a "New arrivals" sort, "New this week/month" filters, and returning visitors see a "since your last visit" banner.
 - **Momentum tab** with GitHub Trending daily / weekly / monthly signals.

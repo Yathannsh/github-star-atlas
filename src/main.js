@@ -9,14 +9,14 @@ const storedBatch = Number(localStorage.getItem('pageSize') || 100);
 const state = {
   repos: [], meta: null,
   tab: 'leaderboard', query: '', language: 'All', license: 'All', activity: 'All', trend: 'All',
-  sort: 'rank', visibleCount: storedBatch, autoLoad: false, pageSize: storedBatch, density: localStorage.getItem('density') || 'compact', selected: null,
+  sort: 'rank', page: 1, pageSize: storedBatch, density: localStorage.getItem('density') || 'compact', selected: null,
   sinceVisit: false,
 };
 
-const TABS = ['leaderboard', 'whatsup', 'method'];
+const TABS = ['leaderboard', 'whatsup', 'arrivals', 'method'];
 const SORTS = ['rank', 'stars', 'recent', 'forks', 'issues', 'name', 'hot', 'velocity', 'gravity', 'arrived'];
 const URL_FILTERS = ['language', 'license', 'activity', 'trend'];
-function defaultSort(tab) { return tab === 'whatsup' ? 'hot' : 'rank'; }
+function defaultSort(tab) { return tab === 'whatsup' ? 'hot' : tab === 'arrivals' ? 'arrived' : 'rank'; }
 
 function initStateFromUrl() {
   const params = new URLSearchParams(location.search);
@@ -24,6 +24,8 @@ function initStateFromUrl() {
   state.sort = SORTS.includes(params.get('sort')) ? params.get('sort') : defaultSort(state.tab);
   if (params.get('q')) state.query = params.get('q');
   for (const key of URL_FILTERS) if (params.get(key)) state[key] = params.get(key);
+  const page = Number(params.get('page'));
+  if (Number.isInteger(page) && page > 1) state.page = page;
 }
 
 function syncUrl() {
@@ -32,11 +34,12 @@ function syncUrl() {
   if (state.sort !== defaultSort(state.tab)) params.set('sort', state.sort);
   if (state.query.trim()) params.set('q', state.query.trim());
   for (const key of URL_FILTERS) if (state[key] !== 'All') params.set(key, state[key]);
+  if (state.page > 1) params.set('page', String(state.page));
   const qs = params.toString();
   history.replaceState(null, '', qs ? `?${qs}` : location.pathname);
 }
 
-function resetList() { state.visibleCount = state.pageSize; state.autoLoad = false; }
+function resetList() { state.page = 1; }
 
 // --- New-arrival tracking (first_seen comes from the data pipeline) ---
 const NEW_PILL_DAYS = 14;
@@ -75,12 +78,6 @@ function pushedLabel(iso) { const d = daysSince(iso); if (d === 0) return 'today
 function esc(s = '') { return String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
 function countBy(rows, fn) { const m = new Map(); for (const row of rows) m.set(fn(row), (m.get(fn(row)) || 0) + 1); return [...m.entries()].sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0])); }
 
-function bestTrend(r) {
-  const t = r.trending || {};
-  const order = ['daily', 'weekly', 'monthly'];
-  for (const p of order) if (t[p]) return { period: p, ...t[p] };
-  return null;
-}
 function trendGain(r) {
   const t = r.trending || {};
   return Math.max(...periods.map(p => n(t[p]?.stars_gained)), 0);
@@ -139,14 +136,17 @@ function sortRepos(a, b) {
     default: return a.rank - b.rank;
   }
 }
-function filteredRepos() { return state.repos.filter(repoMatches).sort(sortRepos); }
+function filteredRepos() {
+  const pool = state.tab === 'arrivals' ? state.repos.filter(r => r.first_seen) : state.repos;
+  return pool.filter(repoMatches).sort(sortRepos);
+}
 
 function renderShell() {
   app.innerHTML = `
     <header class="topbar">
       <div class="brand"><span class="mark">★</span><div><b>GitHub 10k+ Star Atlas</b><small>readable repo intelligence</small></div></div>
       <nav class="tabs" role="tablist">
-        ${tabButton('leaderboard','Leaderboard')}${tabButton('whatsup',"What's up")}${tabButton('method','Method')}
+        ${tabButton('leaderboard','Leaderboard')}${tabButton('whatsup',"What's up")}${tabButton('arrivals','Arrivals')}${tabButton('method','Method')}
       </nav>
       <a class="link" href="https://github.com/trending" target="_blank" rel="noreferrer">GitHub Trending ↗</a>
     </header>
@@ -181,14 +181,16 @@ function renderControls() {
   const licenses = ['All', ...countBy(state.repos, r => r.license || 'NOASSERTION').map(([k]) => k).slice(0, 42)];
   const sortOptions = state.tab === 'whatsup'
     ? [['hot','Hot'], ['velocity','Velocity'], ['gravity','HN gravity'], ['arrived','New arrivals'], ['recent','Recently pushed'], ['stars','Stars']]
-    : [['rank','Rank'], ['stars','Stars'], ['arrived','New arrivals'], ['recent','Recently pushed'], ['forks','Forks'], ['issues','Issues'], ['name','Name']];
+    : state.tab === 'arrivals'
+      ? [['arrived','Newest first'], ['stars','Stars'], ['recent','Recently pushed'], ['forks','Forks']]
+      : [['rank','Rank'], ['stars','Stars'], ['arrived','New arrivals'], ['recent','Recently pushed'], ['forks','Forks'], ['issues','Issues'], ['name','Name']];
   document.querySelector('#controls').innerHTML = `
     <label class="search"><span>Search</span><input id="q" value="${esc(state.query)}" placeholder="repo, owner, topic, language…" /></label>
     <label><span>Language</span><select id="language">${opts(languages, state.language)}</select></label>
     <label><span>Trend</span><select id="trend">${opts(['All','Any trend','daily','weekly','monthly','New this week','New this month'], state.trend)}</select></label>
     <label><span>Activity</span><select id="activity">${opts(['All','Active only','Pushed in 30d','Pushed in 90d','Pushed this year','Archived only'], state.activity)}</select></label>
     <label><span>License</span><select id="license">${opts(licenses, state.license)}</select></label>
-    <label><span>Batch</span><select id="pageSize">${[25,50,100,250,500,'All'].map(v => `<option value="${v}" ${String(v)===String(state.pageSize) || (v==='All' && state.pageSize===99999) ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+    <label><span>Rows</span><select id="pageSize">${[25,50,100,250,500,'All'].map(v => `<option value="${v}" ${String(v)===String(state.pageSize) || (v==='All' && state.pageSize===99999) ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
     <label><span>Sort</span><select id="sort">${sortOptions.map(([v,l]) => `<option value="${v}" ${v===state.sort?'selected':''}>${l}</option>`).join('')}</select></label>
     <button class="density" id="density">${state.density === 'compact' ? 'Compact' : 'Comfort'}</button>`;
   for (const id of ['q','language','trend','activity','license','sort','pageSize']) {
@@ -209,54 +211,39 @@ function renderControls() {
 }
 function opts(values, selected) { return values.map(v => `<option value="${esc(v)}" ${v === selected ? 'selected' : ''}>${esc(v[0]?.toUpperCase()+v.slice(1))}</option>`).join(''); }
 
-let loadObserver = null;
-
 function renderContent(filtered) {
-  loadObserver?.disconnect();
   if (state.tab === 'method') return renderMethod();
   renderTable(filtered);
-}
-function shownLabel(filtered) { return `${fullFmt.format(Math.min(state.visibleCount, filtered.length))} of ${fullFmt.format(filtered.length)} shown`; }
-function footHtml(filtered) {
-  const remaining = filtered.length - state.visibleCount;
-  const next = Math.min(state.pageSize, remaining);
-  return `
-    ${remaining > 0 ? `<button class="loadMore" id="loadMore">▼ Show ${fullFmt.format(next)} more</button>` : ''}
-    <span class="shownNote">${shownLabel(filtered)}</span>
-    <button class="toTop" id="toTop">↑ Top</button>`;
 }
 function bindRow(row) {
   row.addEventListener('click', () => { state.selected = state.repos.find(r => r.id == row.dataset.id); render(); });
 }
-function bindFoot(filtered) {
-  document.querySelector('#loadMore')?.addEventListener('click', () => {
-    const firstClick = !state.autoLoad;
-    appendBatch(filtered);
-    if (firstClick) { state.autoLoad = true; setupAutoLoad(filtered); }
-  });
-  document.querySelector('#toTop')?.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+function pageList(current, pages) {
+  const wanted = new Set([1, pages, current - 2, current - 1, current, current + 1, current + 2]);
+  const list = [...wanted].filter(p => p >= 1 && p <= pages).sort((a, b) => a - b);
+  const out = [];
+  let prev = 0;
+  for (const p of list) { if (p - prev > 1) out.push('…'); out.push(p); prev = p; }
+  return out;
 }
-function appendBatch(filtered) {
-  const next = filtered.slice(state.visibleCount, state.visibleCount + state.pageSize);
-  if (!next.length) return;
-  state.visibleCount += next.length;
-  const table = document.querySelector('.repoTable');
-  table.insertAdjacentHTML('beforeend', next.map(rowHtml).join(''));
-  const rows = table.querySelectorAll('.repoRow');
-  for (let i = rows.length - next.length; i < rows.length; i++) bindRow(rows[i]);
-  document.querySelector('#shownNote').textContent = shownLabel(filtered);
-  document.querySelector('#listFoot').innerHTML = footHtml(filtered);
-  bindFoot(filtered);
+function pagerHtml(pages, compact = false) {
+  const numbers = compact ? '' : pageList(state.page, pages)
+    .map(p => p === '…' ? '<span class="gap">…</span>' : `<button class="pageBtn ${p === state.page ? 'current' : ''}" data-page="${p}">${p}</button>`)
+    .join('');
+  return `<nav class="pager" aria-label="Pagination">
+    <button class="pageBtn nav" data-page="${state.page - 1}" ${state.page === 1 ? 'disabled' : ''}>←</button>
+    ${numbers}
+    <button class="pageBtn nav" data-page="${state.page + 1}" ${state.page === pages ? 'disabled' : ''}>→</button>
+  </nav>`;
 }
-function setupAutoLoad(filtered) {
-  loadObserver?.disconnect();
-  if (!state.autoLoad) return;
-  const sentinel = document.querySelector('#sentinel');
-  if (!sentinel) return;
-  loadObserver = new IntersectionObserver(entries => {
-    if (entries.some(e => e.isIntersecting) && state.visibleCount < filtered.length) appendBatch(filtered);
-  }, { rootMargin: '600px 0px' });
-  loadObserver.observe(sentinel);
+function bindPager() {
+  document.querySelectorAll('.pageBtn[data-page]').forEach(btn => btn.addEventListener('click', () => {
+    const p = Number(btn.dataset.page);
+    if (!Number.isInteger(p) || p < 1) return;
+    state.page = p;
+    render();
+    window.scrollTo({ top: 0 });
+  }));
 }
 function bannerHtml() {
   const fresh = newSinceVisit();
@@ -273,31 +260,37 @@ function bindBanner() {
   document.querySelector('#sinceDismiss')?.addEventListener('click', () => { bannerHidden = true; state.sinceVisit = false; resetList(); render(); });
 }
 function renderTable(filtered) {
-  state.visibleCount = Math.min(state.visibleCount, filtered.length) || Math.min(state.pageSize, filtered.length);
-  const rows = filtered.slice(0, state.visibleCount);
+  const pages = Math.max(1, Math.ceil(filtered.length / state.pageSize));
+  state.page = Math.min(state.page, pages);
+  const start = (state.page - 1) * state.pageSize;
+  const rows = filtered.slice(start, start + state.pageSize);
   const intro = state.tab === 'whatsup'
     ? `<div class="intro"><b>What's up</b><span>Recent velocity first: GitHub Trending stars gained + Reddit/HN-style time decay + push freshness. Totals are tie-breakers, not the story.</span></div>`
-    : `<div class="intro"><b>Leaderboard</b><span>One-line scan view of the full 10k+ universe. Click a row for full metadata.</span></div>`;
+    : state.tab === 'arrivals'
+      ? `<div class="intro"><b>Arrivals</b><span>Every repository dated from the day it first crossed 10,000 stars, newest first. Repos already above 10k when tracking began are not listed.</span></div>`
+      : `<div class="intro"><b>Leaderboard</b><span>One-line scan view of the full 10k+ universe. Click a row for full metadata.</span></div>`;
+  const emptyMsg = state.tab === 'arrivals' && !state.repos.some(r => r.first_seen)
+    ? 'No arrivals recorded yet. Tracking began with the current snapshot — repositories that cross 10,000 stars appear here after each 12-hour refresh.'
+    : 'No repositories match these filters.';
   if (!state.selected && rows[0]) state.selected = rows[0];
   document.querySelector('#content').innerHTML = `
     ${bannerHtml()}
     ${intro}
     <div class="tableShell ${state.density}">
-      <div class="tableMeta"><span>${fullFmt.format(filtered.length)} matches</span><span id="shownNote">${shownLabel(filtered)}</span></div>
+      <div class="tableMeta"><span>${fullFmt.format(filtered.length)} matches</span><span>Page ${state.page} of ${pages}</span>${pagerHtml(pages, true)}</div>
       <div class="repoTable" role="table">
         <div class="thead" role="row">${headers()}</div>
-        ${rows.map(rowHtml).join('') || '<div class="empty">No repositories match these filters.</div>'}
+        ${rows.map(rowHtml).join('') || `<div class="empty">${emptyMsg}</div>`}
       </div>
     </div>
-    <div id="sentinel" aria-hidden="true"></div>
-    <div class="listFoot" id="listFoot">${footHtml(filtered)}</div>`;
+    ${pages > 1 ? `<div class="pagerBar">${pagerHtml(pages)}</div>` : ''}`;
   document.querySelectorAll('.repoRow').forEach(bindRow);
   bindBanner();
-  bindFoot(filtered);
-  setupAutoLoad(filtered);
+  bindPager();
 }
 function headers() {
-  return ['#','Repository','Description','Stars','Δ trend','Lang','Pushed','Signal'].map(h => `<div>${h}</div>`).join('');
+  const last = state.tab === 'arrivals' ? 'Crossed 10k' : 'Signal';
+  return ['#','Repository','Description','Stars','Δ trend','Lang','Pushed',last].map(h => `<div>${h}</div>`).join('');
 }
 function trendPills(r) {
   const t = r.trending || {};
@@ -307,9 +300,10 @@ function trendPills(r) {
   return pills.join('') || `<span class="mutedText">—</span>`;
 }
 function rowHtml(r) {
-  const trend = bestTrend(r);
   const gain = trendGain(r);
-  const signal = state.tab === 'whatsup' ? hotScore(r).toFixed(1) : (trend ? `${periodLabels[trend.period]} #${trend.rank}` : 'steady');
+  const lastCell = state.tab === 'arrivals'
+    ? `<span class="crossedDate">${r.first_seen ? dateFmt.format(new Date(r.first_seen)) : '—'}</span>`
+    : trendPills(r);
   return `<div class="repoRow ${state.selected?.id === r.id ? 'selected' : ''}" role="row" data-id="${r.id}">
     <div class="rank">${r.rank}</div>
     <div class="repoName"><a href="${r.html_url}" target="_blank" rel="noreferrer">${esc(r.full_name)}</a></div>
@@ -318,7 +312,7 @@ function rowHtml(r) {
     <div class="num ${gain ? 'gain' : ''}">${gain ? '+' + fullFmt.format(gain) : '—'}</div>
     <div><span class="lang">${esc(r.language || 'Unknown')}</span></div>
     <div>${pushedLabel(r.pushed_at)}</div>
-    <div>${trendPills(r)}</div>
+    <div>${lastCell}</div>
   </div>`;
 }
 function detailsHtml(r) {
@@ -361,10 +355,10 @@ function bindShellEvents() {
 
 function render() {
   document.body.dataset.density = state.density;
-  syncUrl();
   renderShell(); bindShellEvents();
   const filtered = filteredRepos();
   renderSidebar(filtered); renderControls(); renderContent(filtered);
+  syncUrl();
 }
 
 async function init() {
