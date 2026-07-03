@@ -23,6 +23,7 @@ See [`docs/comparison.md`](docs/comparison.md) for the full competitive comparis
 - **Readable Crunchbase-style table** with a dedicated two-line description column.
 - **Load-more reading flow**: batches of 25–500 (or all) rows append in place; after the first click the next batch auto-loads as you scroll.
 - **Shareable views**: tab, sort, search, and filters sync to the URL (e.g. `?tab=whatsup&sort=gravity`).
+- **New arrivals tracking**: `public/first_seen.json` records when each repo first crossed 10k stars — new crossers get a "New 10k+" pill, a "New arrivals" sort, "New this week/month" filters, and returning visitors see a "since your last visit" banner.
 - **Momentum tab** with GitHub Trending daily / weekly / monthly signals.
 - **Transparent scoring** via hot, velocity, and gravity-style sorting.
 - **Filters** for search, language, trend window, activity, license, and sort order.

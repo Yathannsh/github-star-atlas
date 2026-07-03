@@ -18,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "public" / "data.json"
+FIRST_SEEN = ROOT / "public" / "first_seen.json"
 USER_AGENT = "Hermes-Agent37 github-stars-10k-site"
 TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
 HEADERS = {
@@ -129,6 +130,41 @@ def compact_repo(r):
         "default_branch": r.get("default_branch"),
     }
 
+def load_first_seen(registry_path: Path) -> dict[str, str | None]:
+    """Load the append-only repo-id → first-seen-date registry."""
+    if registry_path.exists():
+        try:
+            data = json.loads(registry_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+            print(f"first_seen registry is not an object; starting fresh", file=sys.stderr)
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"first_seen registry unreadable ({exc}); starting fresh", file=sys.stderr)
+    return {}
+
+
+def apply_first_seen(repo_list: list[dict], registry_path: Path = FIRST_SEEN, today: str | None = None) -> dict[str, str | None]:
+    """Stamp each repo's first_seen from the registry, adding unseen ids.
+
+    Ids already in the registry keep their original date even if the repo
+    dropped below the threshold and re-crossed. An empty/missing registry
+    means tracking starts now: current repos become founding members (null)
+    rather than all flagging as new.
+    """
+    registry = load_first_seen(registry_path)
+    founding = not registry
+    stamp = today or datetime.now(timezone.utc).date().isoformat()
+    for repo in repo_list:
+        key = str(repo["id"])
+        if key not in registry:
+            registry[key] = None if founding else stamp
+        repo["first_seen"] = registry[key]
+    registry_path.write_text(
+        json.dumps(registry, sort_keys=True, indent=1), encoding="utf-8"
+    )
+    return registry
+
+
 def main():
     (ROOT / "public").mkdir(exist_ok=True)
     ranges = partition(10000, None)
@@ -169,6 +205,7 @@ def main():
     repo_list = sorted(repos.values(), key=lambda r: (-r["stars"], r["full_name"].lower()))
     for i, r in enumerate(repo_list, 1):
         r["rank"] = i
+    apply_first_seen(repo_list)
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "threshold": 10000,
