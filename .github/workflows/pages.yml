@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -44,4 +44,11 @@ jobs:
 
       - name: Deploy to GitHub Pages
         id: deployment
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      # Pages deploys occasionally fail transiently ("try again later"); a
+      # same-SHA retry after a failed deployment is known to succeed.
+      - name: Retry deploy once
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4

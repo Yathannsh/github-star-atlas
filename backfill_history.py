@@ -58,6 +58,9 @@ def save_details(details: dict) -> None:
     DETAILS.write_text(json.dumps(details, sort_keys=True, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
+RATE_UNKNOWN = 10**6  # header absent != exhausted
+
+
 def crossing_date(full_name: str) -> tuple[str | None, int]:
     """Return (ISO date of the 10,000th star or None, remaining rate)."""
     url = (f"https://api.github.com/repos/{full_name}/stargazers"
@@ -65,15 +68,21 @@ def crossing_date(full_name: str) -> tuple[str | None, int]:
     req = urllib.request.Request(url, headers=API_HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            remaining = int(resp.headers.get("x-ratelimit-remaining", "1"))
+            remaining = int(resp.headers.get("x-ratelimit-remaining") or RATE_UNKNOWN)
             items = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        remaining = int(e.headers.get("x-ratelimit-remaining", "1") or "1")
-        if e.code in (403, 429):
-            return None, 0  # rate limited; caller stops
-        return None, remaining  # 404/451/...: leave undated
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
-        return None, 1
+        header = e.headers.get("x-ratelimit-remaining")
+        remaining = int(header) if header and header.isdigit() else RATE_UNKNOWN
+        # Only a 403/429 that GitHub itself attributes to the rate limit
+        # should stop the run; any other error just leaves this repo undated.
+        if e.code in (403, 429) and (header == "0" or e.headers.get("retry-after")):
+            print(f"  rate limited on {full_name} (HTTP {e.code})", flush=True)
+            return None, 0
+        print(f"  skip {full_name}: HTTP {e.code} (remaining={header})", flush=True)
+        return None, remaining
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        print(f"  skip {full_name}: {type(exc).__name__}", flush=True)
+        return None, RATE_UNKNOWN
     if isinstance(items, list) and len(items) == 100:
         starred = items[-1].get("starred_at")
         if starred:
