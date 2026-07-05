@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   refresh:
@@ -46,3 +48,13 @@ jobs:
           else
             echo "No data changes to commit."
           fi
+
+      # Bot pushes don't trigger other workflows, so the refresh deploys
+      # the freshly built site itself.
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4

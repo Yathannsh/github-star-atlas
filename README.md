@@ -1,5 +1,7 @@
 # GitHub Star Atlas
 
+**Live site:** https://yathannsh.github.io/github-star-atlas/
+
 A readable, auto-refreshing atlas of every public GitHub repository with more than **10,000 stars**.
 
 Unlike a simple leaderboard, GitHub Star Atlas combines lifetime popularity with momentum signals from GitHub Trending and lightweight hot-ranking models inspired by Reddit and Hacker News.

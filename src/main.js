@@ -341,7 +341,7 @@ function renderMethod() {
         <li><b>HN gravity:</b> period stars gained divided by age/freshness decay, surfacing newer fast movers.</li>
         <li><b>New arrivals:</b> an append-only <code>first_seen</code> registry records the date each repo is first observed above 10k stars, powering the New pills, the New arrivals sort, and the since-your-last-visit banner. Repos present before tracking began are founding members and never flagged as new.</li>
       </ul></article>
-      <article class="methodCard"><h2>Data source</h2><p>${esc(state.meta?.method || '')}</p><p>${esc(state.meta?.trending_snapshot?.note || '')}</p><a href="/data.json" download>Download full JSON snapshot</a></article>
+      <article class="methodCard"><h2>Data source</h2><p>${esc(state.meta?.method || '')}</p><p>${esc(state.meta?.trending_snapshot?.note || '')}</p><a href="data.json" download>Download full JSON snapshot</a></article>
     </section>`;
 }
 
@@ -365,7 +365,7 @@ async function init() {
   initStateFromUrl();
   prevVisit = trackVisit();
   app.innerHTML = '<div class="loading">Loading GitHub Star Atlas…</div>';
-  const res = await fetch('/data.json', { cache: 'no-store' });
+  const res = await fetch('data.json', { cache: 'no-store' });
   if (!res.ok) throw new Error(`data.json returned ${res.status}`);
   const data = await res.json();
   state.meta = data;
