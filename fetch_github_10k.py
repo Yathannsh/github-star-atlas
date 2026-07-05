@@ -157,7 +157,19 @@ def apply_first_seen(repo_list: list[dict], registry_path: Path = FIRST_SEEN, to
     for repo in repo_list:
         key = str(repo["id"])
         if key not in registry:
-            registry[key] = None if founding else stamp
+            if founding:
+                registry[key] = None
+            else:
+                # Prefer the exact date of the 10,000th star; fall back to
+                # the crawl date if the lookup is unavailable (rate limit,
+                # OAuth-token 404s, network).
+                exact = None
+                try:
+                    from backfill_history import crossing_date
+                    exact, _ = crossing_date(repo["full_name"])
+                except Exception as exc:
+                    print(f"crossing-date lookup failed for {repo['full_name']}: {exc}", file=sys.stderr)
+                registry[key] = exact or stamp
         repo["first_seen"] = registry[key]
     registry_path.write_text(
         json.dumps(registry, sort_keys=True, indent=1), encoding="utf-8"

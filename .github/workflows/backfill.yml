@@ -1,0 +1,60 @@
+name: Backfill 10k crossing dates
+
+# Historical one-time backfill: dates every founding-member repo by the
+# timestamp of its 10,000th star (stargazers API page 100). Runs hourly
+# because GITHUB_TOKEN gets 1,000 API requests/hour; each run spends ~900
+# and commits progress. Once every repo is dated, runs become no-ops and
+# this workflow can be deleted.
+
+on:
+  schedule:
+    - cron: '37 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Backfill crossing dates
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 backfill_history.py --dates --budget 900
+
+      - name: Restamp data.json from registry
+        run: |
+          python3 - <<'EOF'
+          import json
+          data = json.load(open('public/data.json'))
+          reg = json.load(open('public/first_seen.json'))
+          for r in data['repos']:
+              r['first_seen'] = reg.get(str(r['id']))
+          json.dump(data, open('public/data.json', 'w'), ensure_ascii=False, indent=2)
+          EOF
+
+      - name: Commit progress and deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -n "$(git status --porcelain public/first_seen.json public/data.json)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add public/first_seen.json public/data.json
+            git commit -m "chore(data): backfill 10k crossing dates"
+            git pull --rebase origin main
+            git push
+            gh workflow run pages.yml --ref main
+          else
+            echo "Backfill complete — nothing left to date."
+          fi

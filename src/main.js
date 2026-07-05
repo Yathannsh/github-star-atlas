@@ -14,7 +14,7 @@ const state = {
 };
 
 const TABS = ['leaderboard', 'whatsup', 'arrivals', 'method'];
-const SORTS = ['rank', 'stars', 'recent', 'forks', 'issues', 'name', 'hot', 'velocity', 'gravity', 'arrived'];
+const SORTS = ['rank', 'stars', 'recent', 'forks', 'issues', 'name', 'hot', 'velocity', 'gravity', 'arrived', 'arrived_asc'];
 const URL_FILTERS = ['language', 'license', 'activity', 'trend'];
 function defaultSort(tab) { return tab === 'whatsup' ? 'hot' : tab === 'arrivals' ? 'arrived' : 'rank'; }
 
@@ -131,6 +131,7 @@ function sortRepos(a, b) {
     case 'issues': return b.open_issues - a.open_issues || b.stars - a.stars;
     case 'recent': return new Date(b.pushed_at || 0) - new Date(a.pushed_at || 0) || b.stars - a.stars;
     case 'arrived': return arrivedAt(b) - arrivedAt(a) || b.stars - a.stars;
+    case 'arrived_asc': return (arrivedAt(a) || Infinity) - (arrivedAt(b) || Infinity) || b.stars - a.stars;
     case 'name': return a.full_name.localeCompare(b.full_name);
     case 'rank':
     default: return a.rank - b.rank;
@@ -182,7 +183,7 @@ function renderControls() {
   const sortOptions = state.tab === 'whatsup'
     ? [['hot','Hot'], ['velocity','Velocity'], ['gravity','HN gravity'], ['arrived','New arrivals'], ['recent','Recently pushed'], ['stars','Stars']]
     : state.tab === 'arrivals'
-      ? [['arrived','Newest first'], ['stars','Stars'], ['recent','Recently pushed'], ['forks','Forks']]
+      ? [['arrived','Newest first'], ['arrived_asc','Oldest first'], ['stars','Stars'], ['recent','Recently pushed'], ['forks','Forks']]
       : [['rank','Rank'], ['stars','Stars'], ['arrived','New arrivals'], ['recent','Recently pushed'], ['forks','Forks'], ['issues','Issues'], ['name','Name']];
   document.querySelector('#controls').innerHTML = `
     <label class="search"><span>Search</span><input id="q" value="${esc(state.query)}" placeholder="repo, owner, topic, language…" /></label>
@@ -215,8 +216,30 @@ function renderContent(filtered) {
   if (state.tab === 'method') return renderMethod();
   renderTable(filtered);
 }
+// Extended descriptions (README extracts) load lazily on first row expansion.
+let detailsMap = null;
+let detailsPromise = null;
+function loadDetails() {
+  detailsPromise ||= fetch('details.json')
+    .then(r => (r.ok ? r.json() : {}))
+    .catch(() => ({}))
+    .then(m => (detailsMap = m));
+  return detailsPromise;
+}
+function aboutHtml(r) {
+  if (!detailsMap) return '<span class="mutedText">Loading extended description…</span>';
+  const ext = detailsMap[String(r.id)];
+  const text = ext || r.description || 'No description available.';
+  return text.split('\n\n').map(p => esc(p)).join('</p><p>');
+}
 function bindRow(row) {
-  row.addEventListener('click', () => { state.selected = state.repos.find(r => r.id == row.dataset.id); render(); });
+  row.addEventListener('click', e => {
+    if (e.target.closest('a')) return;
+    const repo = state.repos.find(r => r.id == row.dataset.id);
+    state.selected = state.selected?.id === repo?.id ? null : repo;
+    if (state.selected && !detailsMap) loadDetails().then(() => { if (state.selected) render(); });
+    render();
+  });
 }
 function pageList(current, pages) {
   const wanted = new Set([1, pages, current - 2, current - 1, current, current + 1, current + 2]);
@@ -267,12 +290,11 @@ function renderTable(filtered) {
   const intro = state.tab === 'whatsup'
     ? `<div class="intro"><b>What's up</b><span>Recent velocity first: GitHub Trending stars gained + Reddit/HN-style time decay + push freshness. Totals are tie-breakers, not the story.</span></div>`
     : state.tab === 'arrivals'
-      ? `<div class="intro"><b>Arrivals</b><span>Every repository dated from the day it first crossed 10,000 stars, newest first. Repos already above 10k when tracking began are not listed.</span></div>`
+      ? `<div class="intro"><b>Arrivals</b><span>Every repository dated from the day it first crossed 10,000 stars. Historical dates are reconstructed from GitHub's star history; undated repos appear once the backfill reaches them.</span></div>`
       : `<div class="intro"><b>Leaderboard</b><span>One-line scan view of the full 10k+ universe. Click a row for full metadata.</span></div>`;
   const emptyMsg = state.tab === 'arrivals' && !state.repos.some(r => r.first_seen)
     ? 'No arrivals recorded yet. Tracking began with the current snapshot — repositories that cross 10,000 stars appear here after each 12-hour refresh.'
     : 'No repositories match these filters.';
-  if (!state.selected && rows[0]) state.selected = rows[0];
   document.querySelector('#content').innerHTML = `
     ${bannerHtml()}
     ${intro}
@@ -280,7 +302,7 @@ function renderTable(filtered) {
       <div class="tableMeta"><span>${fullFmt.format(filtered.length)} matches</span><span>Page ${state.page} of ${pages}</span>${pagerHtml(pages, true)}</div>
       <div class="repoTable" role="table">
         <div class="thead" role="row">${headers()}</div>
-        ${rows.map(rowHtml).join('') || `<div class="empty">${emptyMsg}</div>`}
+        ${rows.map(r => rowHtml(r) + (state.selected?.id === r.id ? `<div class="rowDetail">${detailsHtml(r)}</div>` : '')).join('') || `<div class="empty">${emptyMsg}</div>`}
       </div>
     </div>
     ${pages > 1 ? `<div class="pagerBar">${pagerHtml(pages)}</div>` : ''}`;
@@ -319,8 +341,8 @@ function detailsHtml(r) {
   const t = r.trending || {};
   const trendLines = periods.filter(p => t[p]).map(p => `<span>${periodLabels[p]}: #${t[p].rank}${t[p].stars_gained ? ` · +${fullFmt.format(t[p].stars_gained)} stars` : ''}</span>`).join('');
   return `<div class="detailHeader"><span class="eyebrow">Repository profile</span><h3><a href="${r.html_url}" target="_blank" rel="noreferrer">${esc(r.full_name)} ↗</a></h3></div>
-    <section class="fullDescription"><b>Description</b><p>${esc(r.description || 'No description provided by GitHub.')}</p></section>
-    <div class="detailGrid"><span>Hot ${hotScore(r).toFixed(2)}</span><span>Gravity ${gravityScore(r).toFixed(2)}</span><span>${fullFmt.format(r.stars)} stars</span><span>${fullFmt.format(r.forks)} forks</span><span>Created ${r.created_at ? dateFmt.format(new Date(r.created_at)) : '—'}</span><span>Pushed ${r.pushed_at ? dateFmt.format(new Date(r.pushed_at)) : '—'}</span><span>Crossed 10k ${r.first_seen ? dateFmt.format(new Date(r.first_seen)) : 'before tracking began'}</span>${trendLines || '<span>No GitHub Trending hit in current snapshot</span>'}</div>
+    <section class="fullDescription"><b>About</b><p>${aboutHtml(r)}</p></section>
+    <div class="detailGrid"><span>Hot ${hotScore(r).toFixed(2)}</span><span>Gravity ${gravityScore(r).toFixed(2)}</span><span>${fullFmt.format(r.stars)} stars</span><span>${fullFmt.format(r.forks)} forks</span><span>Created ${r.created_at ? dateFmt.format(new Date(r.created_at)) : '—'}</span><span>Pushed ${r.pushed_at ? dateFmt.format(new Date(r.pushed_at)) : '—'}</span><span>Crossed 10k ${r.first_seen ? dateFmt.format(new Date(r.first_seen)) : '(date pending backfill)'}</span>${trendLines || '<span>No GitHub Trending hit in current snapshot</span>'}</div>
     <div class="topics">${(r.topics || []).slice(0, 12).map(t => `<span>${esc(t)}</span>`).join('')}</div>`;
 }
 

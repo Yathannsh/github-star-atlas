@@ -7,8 +7,7 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
+  actions: write
 
 jobs:
   refresh:
@@ -33,16 +32,17 @@ jobs:
         run: |
           python3 fetch_github_10k.py
           python3 fetch_trending.py
+          python3 backfill_history.py --details --budget 100
 
       - name: Build
         run: npm run build
 
       - name: Commit updated data if changed
         run: |
-          if [[ -n "$(git status --porcelain public/data.json public/first_seen.json)" ]]; then
+          if [[ -n "$(git status --porcelain public/data.json public/first_seen.json public/details.json)" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add public/data.json public/first_seen.json
+            git add public/data.json public/first_seen.json public/details.json
             git commit -m "chore(data): refresh GitHub star atlas"
             git pull --rebase origin main
             git push
@@ -50,12 +50,12 @@ jobs:
             echo "No data changes to commit."
           fi
 
-      # Bot pushes don't trigger other workflows, so the refresh deploys
-      # the freshly built site itself.
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
+      # Pages deployments are keyed by commit SHA, so this run cannot deploy
+      # its own artifact (a deploy at this SHA may already exist from the
+      # push that triggered pages.yml). Dispatch pages.yml instead — it
+      # builds at the fresh data commit. workflow_dispatch created with
+      # GITHUB_TOKEN is exempt from the bot no-retrigger rule.
+      - name: Deploy site with fresh data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --ref main
