@@ -3962,7 +3962,7 @@
       "disabled": false,
       "size": 170835,
       "default_branch": "main",
-      "first_seen": null
+      "first_seen": "2019-05-07"
     },
     {
       "id": 63537249,
@@ -29028,7 +29028,7 @@
       "disabled": false,
       "size": 83571,
       "default_branch": "main",
-      "first_seen": null
+      "first_seen": "2025-10-24"
     },
     {
       "id": 1135212071,
@@ -60691,7 +60691,7 @@
       "disabled": false,
       "size": 8969,
       "default_branch": "main",
-      "first_seen": null
+      "first_seen": "2025-07-02"
     },
     {
       "id": 317319347,
