@@ -25,8 +25,9 @@ GitHub Star Atlas is a deliberately opinionated, exhaustive, readable atlas of p
 ## Features intentionally built from gaps
 
 - **Rows per page selector** because large datasets need user-controlled density.
+- **New arrivals tab** because the 10k+ universe grows every refresh cycle and repos that cross the threshold are easy to miss. The New tab surfaces them in discovery order with a mark-seen dismiss flow.
 - **Description-first table layout** because many GitHub ranking pages bury the description or truncate it too aggressively.
-- **What’s up tab** because lifetime star rankings are stable but do not reveal current shifts.
+- **What's up tab** because lifetime star rankings are stable but do not reveal current shifts.
 - **Downloadable JSON** because the dataset itself should be useful for researchers and builders.
 - **Methodology docs** because star rankings are easy to misinterpret without knowing GitHub Search API limits and trending-window limitations.
 
