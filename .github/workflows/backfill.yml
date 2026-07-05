@@ -27,10 +27,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Stargazer listing is forbidden to app tokens (Actions GITHUB_TOKEN
+      # gets 403, OAuth tokens 404); it needs a classic PAT stored as the
+      # BACKFILL_TOKEN secret. Without the secret this run is a fast no-op.
       - name: Backfill crossing dates
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: python3 backfill_history.py --dates --budget 900
+          GITHUB_TOKEN: ${{ secrets.BACKFILL_TOKEN }}
+        run: |
+          if [[ -z "$GITHUB_TOKEN" ]]; then
+            echo "BACKFILL_TOKEN secret not set; skipping date lookups."
+            exit 0
+          fi
+          python3 backfill_history.py --dates --budget 4500
 
       - name: Restamp data.json from registry
         run: |
